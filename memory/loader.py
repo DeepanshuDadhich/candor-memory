@@ -74,9 +74,14 @@ def load(data_dir):
         where = chans.get(x["channel_id"], x["channel_id"])
         if x.get("subtype") == "message_deleted":
             deleted[x["target_id"]] = t
-            continue                       # the deletion event itself carries no content
+            add(id=x["id"], record=x["id"], time=t, source="slack",
+                text=f"[Slack #{where}] (a message was deleted)", meta={"deletes": x["target_id"]})
+            continue                       # the event carries no content of the deleted message
         if x.get("subtype") == "message_changed":
             edits.setdefault(x["target_id"], []).append((t, x["text"]))
+            add(id=x["id"], record=x["id"], time=t, source="slack",
+                text=f"[Slack #{where}, edit of {x['target_id']}] {x['text']}",
+                meta={"edit_of": x["target_id"]})
             continue
         who = users.get(x.get("user"), x.get("bot_name") or x.get("user"))
         add(id=x["id"], record=x["id"], time=t, source="slack", speaker=who,
@@ -119,6 +124,9 @@ def visible(units, deleted, edits, as_of):
     out = []
     for u in units:
         if u.time > as_of or (u.id in deleted and deleted[u.id] <= as_of):
+            continue
+        tgt = u.meta.get("edit_of")           # an edit of a message that has since been deleted is gone too
+        if tgt and tgt in deleted and deleted[tgt] <= as_of:
             continue
         newer = [txt for t, txt in edits.get(u.id, []) if t <= as_of]
         if newer:
