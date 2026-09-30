@@ -8,9 +8,11 @@ STOP = set("a an the is are was were be been of to in on for and or did do does 
            "it its this that what when who which how why with at by from as about has have had not".split())
 
 # Tiny alias table so a question word also matches how the data phrases it. Extend by hand from the data.
-ALIASES = {"launch": ["launching", "ship", "release", "v2"], "launching": ["launch", "ship", "release"],
-           "flight": ["fly", "flying", "denver", "airline"], "board": ["boardprep"],
-           "salary": ["compensation", "pay"], "sign": ["signed", "contract", "signature"]}
+# Generic synonyms only (nothing taken from the dataset): a question word also matches its usual variants.
+ALIASES = {"launch": ["launching", "ship", "release"], "launching": ["launch", "ship", "release"],
+           "flight": ["fly", "flying", "airline"], "fly": ["flight", "flying"],
+           "salary": ["compensation", "pay"], "sign": ["signed", "contract", "signature"],
+           "delay": ["slip", "push", "postpone"], "cancel": ["cancelled", "canceled", "drop"]}
 
 
 MONTHS = {m: i for i, ms in enumerate([["jan", "january"], ["feb", "february"], ["mar", "march"], ["apr", "april"],

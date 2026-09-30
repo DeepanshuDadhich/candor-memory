@@ -129,7 +129,7 @@ def build_glossary(data_dir):
 # ---------- prompts ----------
 REWRITE_SYSTEM = """You help search one person's work memory: meetings, Slack, email, calendar, dictation, Codex and ChatGPT chats.
 Given a question and the date it is asked, output JSON only: {"queries": ["...", ...]} with up to 5 short keyword search strings.
-- Use the words the records would actually contain: names, product names, synonyms, related events. For 'why did the launch slip' add words like push, delay, moved, regression, training week.
+- Use the words the records would actually contain: names, product names, synonyms, related events. For 'why was the project delayed' add words like push, slip, delay, moved, blocker, reason.
 - If the question is about the current state of something, add a query aimed at the latest change or decision.
 - If a first name could be several people (see the list), add one query per full name.
 - Questions about a person's message, promise or status: include the person's name plus the topic word.
@@ -160,13 +160,13 @@ Rules:
   what changed, give the history with dates.
 - People disagree: that is NOT a reason to say "I don't know". Answer "People disagree:" and say who holds which view,
   with dates and their reasons. Do not pick a side unless a later decision settles it.
-- Second-hand speech: "Dana said John said X" is NOT John saying X. If the question asks whether someone agreed or said
-  something and the evidence is a report by someone else, say so plainly ("Not directly: Dana said John told her ...")
-  and give what the person said themselves, if any, and the final decision.
+- Second-hand speech: "A said that B said X" is NOT B saying X. If the question asks whether someone agreed or said
+  something and the evidence is a report by someone else, say so plainly (for example "Not directly: Priya said Sam
+  told her he was fine with it") and give what the person said themselves, if any, and the final decision.
 - Speaker labels like 'Speaker 2' are unidentified people: do not guess names.
-- Status questions: answer yes/no first, then the latest state (for example "No. They're reviewing it with their CFO and
-  will reply by ..."). No record of something happening is not the same as not knowing: if the records show the latest
-  state, state it.
+- Status questions: answer yes/no first, then the latest state (for example "No. The vendor is still checking the
+  quote and plans to reply by the 12th"). No record of something happening is not the same as not knowing: if the
+  records show the latest state, state it.
 - Promises: who promised what, any extension, and whether it was done, with dates.
 - Only when the records contain nothing that answers the question: begin with "I don't know" and set abstain true.
   Never guess and never answer from general knowledge.
@@ -292,8 +292,7 @@ class Memory:
         # with them in front of the model. `retrieved` only ever lists records the answer writer really saw.
         merged, add = self.support(bm25, ans["answer"], retrieved)
         if any(i not in retrieved[:10] for i in add):
-            retrieved = merged
-            final = self.write_answer(q["question"], now, retrieved, byid)
-            if final:
-                ans = final
+            final = self.write_answer(q["question"], now, merged, byid)
+            if final:                                   # only report the new list if the final answer used it
+                retrieved, ans = merged, final
         return {"id": q["id"], **ans, "retrieved": retrieved}
