@@ -168,7 +168,8 @@ Rules:
   quote and plans to reply by the 12th"). No record of something happening is not the same as not knowing: if the
   records show the latest state, state it.
 - Promises: who promised what, any extension, and whether it was done, with dates.
-- Only when the records contain nothing that answers the question: begin with "I don't know" and set abstain true.
+- When the records never mention what the question asks about (as opposed to a status that simply hasn't happened
+  yet, which you answer), begin with "I don't know" and set abstain true. Don't pad it with unrelated nearby facts.
   Never guess and never answer from general knowledge.
 - Explicit dates and times. Under 80 words, plain sentences, no long quotes.
 Output JSON only: {"answer": "...", "sources": ["id", ...], "abstain": false}

@@ -138,6 +138,27 @@ class Directory:
                     out.append({**e, "status": "confirmed", "start": {"dateTime": start}, "end": {"dateTime": end}})
         return sorted(out, key=lambda e: e["start"].get("dateTime") or e["start"].get("date"))
 
+    def unresolved_clash(self, command):
+        """A first name several people share, with nothing in the command that picks one: no surname, and no channel
+        that only one of them can be reached on. Returns the people, or [] when the command is clear."""
+        low = command.lower()
+        words = set(re.findall(r"[a-z]+", low))
+        says_slack = "slack" in words or "dm" in words
+        for first, ps in self._by_first().items():
+            if first not in words or len(ps) < 2 or any(p["name"].split()[-1].lower() in words for p in ps):
+                continue
+            if says_slack and len([p for p in ps if p["slack"]]) == 1:
+                continue
+            return ps
+        return []
+
+    def _by_first(self):
+        by_first = {}
+        for p in self.people.values():
+            if p["email"] != self.me["email"]:
+                by_first.setdefault(p["name"].split()[0].lower(), []).append(p)
+        return by_first
+
     def ambiguities(self, command):
         """First names shared by several people, when the command doesn't say which one."""
         words = set(re.findall(r"[a-z]+", command.lower()))
@@ -311,12 +332,33 @@ def normalize(raw, dr, as_of, command):
     return out or [_clarify("I couldn't tell what to do with that. Could you say it another way?")]
 
 
+FACT_REF = re.compile(r"\bthe (corrected|updated|latest|new|final|current|revised|agreed|actual|real|right) "
+                      r"([a-z0-9][a-z0-9 /&-]{1,40}?)(?=\s+(?:and|to|on|in|for|with|from|by)\b|[,.;!?]|$)", re.I)
+
+
+def referenced_facts(command):
+    """'Email John the corrected NRR' mentions a fact without stating it: return questions for the memory."""
+    qs = []
+    for m in FACT_REF.finditer(command):
+        qs.append(f"What is the {m.group(1).lower()} {m.group(2).strip()}?")
+    return qs[:2]
+
+
 def plan(command, as_of, dr, memory=None):
     """Return (actions, facts_used)."""
     now = dt(as_of)
+    clash = dr.unresolved_clash(command)
+    if clash:                                            # enforced in code, not left to the model
+        names = " or ".join(f"{p['name']} ({'Slack' if p['slack'] else 'email, external'})" for p in clash)
+        return [_clarify(f"Which {clash[0]['name'].split()[0]} do you mean: {names}?")], []
     ctx = context_text(dr, now)
     clashes = dr.ambiguities(command)
     facts = []
+    if memory is not None:                               # look up facts the command points at before planning
+        for i, q in enumerate(referenced_facts(command)):
+            res = memory.run({"id": f"ACT-FACT-{i}", "question": q, "as_of": as_of})
+            if res and not res.get("abstained"):
+                facts.append((q, res["answer"]))
     for round_ in range(2):
         user = (f"{ctx}\n\nNAME CLASHES: {'; '.join(clashes) if clashes else 'none'}\n"
                 + (f"\nFACTS FROM MEMORY (already looked up, use them):\n" + "\n".join(f"- {q} -> {a}" for q, a in facts) + "\n" if facts else "")
