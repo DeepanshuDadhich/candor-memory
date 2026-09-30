@@ -13,8 +13,31 @@ ALIASES = {"launch": ["launching", "ship", "release", "v2"], "launching": ["laun
            "salary": ["compensation", "pay"], "sign": ["signed", "contract", "signature"]}
 
 
+MONTHS = {m: i for i, ms in enumerate([["jan", "january"], ["feb", "february"], ["mar", "march"], ["apr", "april"],
+          ["may"], ["jun", "june"], ["jul", "july"], ["aug", "august"], ["sep", "sept", "september"], ["oct", "october"],
+          ["nov", "november"], ["dec", "december"]], 1) for m in ms}
+DATE_RES = [
+    (re.compile(r"\b20\d\d-(\d\d)-(\d\d)"), lambda m: (int(m[1]), int(m[2]))),
+    (re.compile(r"\b([a-z]{3,9})\.? (\d{1,2})(?:st|nd|rd|th)?\b"), lambda m: (MONTHS.get(m[1]), int(m[2]))),
+    (re.compile(r"\b(\d{1,2})/(\d{1,2})\b"), lambda m: (int(m[1]), int(m[2]))),
+]
+
+
+def date_tokens(text):
+    """Same day, one token: '2026-09-23', 'Sep 23', 'September 23rd' and '9/23' all become d0923."""
+    out = []
+    for rx, fn in DATE_RES:
+        for m in rx.finditer(text):
+            mo, day = fn(m)
+            if mo and 1 <= mo <= 12 and 1 <= day <= 31:
+                out.append(f"d{mo:02d}{day:02d}")
+    return out
+
+
 def tokens(text):
-    return [w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in STOP and len(w) > 1]
+    low = text.lower()
+    words = [w for w in re.findall(r"[a-z0-9]+", low) if w not in STOP and len(w) > 1]
+    return words + date_tokens(low)
 
 
 class BM25:
@@ -29,6 +52,16 @@ class BM25:
         n = len(units)
         self.idf = {t: math.log(1 + (n - f + 0.5) / (f + 0.5)) for t, f in df.items()}
         self.k1, self.b = k1, b
+
+    def feedback_query(self, units, n_terms=8, exclude=()):
+        """Pseudo relevance feedback: the rarest terms shared by the top records (names, dates, product words)."""
+        seen = Counter()
+        for u in units:
+            seen.update(set(tokens(u.text)))
+        ex = set(exclude)
+        cand = [t for t in seen if t not in ex and not t.isdigit()]
+        cand.sort(key=lambda t: (seen[t] > 1, self.idf.get(t, 0)), reverse=True)
+        return " ".join(cand[:n_terms])
 
     def search(self, query, k=20):
         q = []

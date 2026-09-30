@@ -25,6 +25,39 @@ def _load_env():
 _load_env()
 _last_call = 0.0
 _pace = threading.Lock()
+USAGE_FILE = Path(__file__).resolve().parent.parent / "out" / "token_usage.json"
+_usage_lock = threading.Lock()
+
+
+def _used():
+    """{model: {"total", "prompt", "completion", "reasoning", "calls"}} (older int-only files are migrated)."""
+    try:
+        raw = json.loads(USAGE_FILE.read_text())
+    except Exception:
+        return {}
+    return {m: (v if isinstance(v, dict) else {"total": int(v)}) for m, v in raw.items()}
+
+
+def _budget_left():
+    """LLM_TOKEN_BUDGET in .env caps total tokens per model across all runs (0 or unset = no cap)."""
+    cap = int(os.environ.get("LLM_TOKEN_BUDGET", "0") or 0)
+    return None if cap <= 0 else cap - _used().get(model_name(), {}).get("total", 0)
+
+
+def _record(usage):
+    usage = usage or {}
+    add = {"total": int(usage.get("total_tokens") or 0),
+           "prompt": int(usage.get("prompt_tokens") or 0),
+           "completion": int(usage.get("completion_tokens") or 0),
+           "reasoning": int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0),
+           "calls": 1}
+    with _usage_lock:
+        u = _used()
+        cur = u.setdefault(model_name(), {})
+        for k, v in add.items():
+            cur[k] = cur.get(k, 0) + v
+        USAGE_FILE.parent.mkdir(exist_ok=True)
+        USAGE_FILE.write_text(json.dumps(u))
 
 
 def available():
@@ -41,13 +74,23 @@ def chat(system, user, temperature=0.0, retries=None):
     global _last_call
     if not available():
         return None
+    left = _budget_left()
+    if left is not None and left <= 0:
+        print(f"LLM token budget used up for {model_name()}; skipping call (falls back to keywords)",
+              file=sys.stderr, flush=True)
+        return None
     base = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     gap = float(os.environ.get("LLM_MIN_INTERVAL", "1.0"))
-    body = json.dumps({
+    payload = {
         "model": model_name(),
         "temperature": temperature,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-    }).encode()
+    }
+    try:                                    # optional provider specific fields, e.g. {"thinking": {"type": "disabled"}}
+        payload.update(json.loads(os.environ.get("LLM_EXTRA_BODY", "") or "{}"))
+    except ValueError:
+        print("LLM_EXTRA_BODY is not valid JSON; ignoring it", file=sys.stderr, flush=True)
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(base + "/chat/completions", data=body, headers={
         "Content-Type": "application/json",
         "Authorization": "Bearer " + os.environ["LLM_API_KEY"]})
@@ -58,8 +101,10 @@ def chat(system, user, temperature=0.0, retries=None):
                 time.sleep(wait)
             _last_call = time.time()
         try:
-            with urllib.request.urlopen(req, timeout=120) as r:
-                return json.loads(r.read())["choices"][0]["message"]["content"]
+            with urllib.request.urlopen(req, timeout=180) as r:
+                data = json.loads(r.read())
+            _record(data.get("usage"))
+            return data["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
                 pause = min(4 * 2 ** attempt, 40)          # back off harder on rate limits
@@ -82,3 +127,8 @@ if __name__ == "__main__":
     else:
         out = chat("Reply with exactly one word.", "Say: ready")
         print("Model replied:", out if out else "(no reply, see the error above)")
+        u = _used().get(model_name(), {})
+        left = _budget_left()
+        print(f"Usage on {model_name()}: total {u.get('total', 0)}, prompt {u.get('prompt', 0)}, "
+              f"completion {u.get('completion', 0)} (of which reasoning {u.get('reasoning', 0)}), calls {u.get('calls', 0)}"
+              + ("" if left is None else f", budget left {left}"))
