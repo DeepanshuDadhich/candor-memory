@@ -25,6 +25,7 @@ def _load_env():
 _load_env()
 _last_call = 0.0
 _pace = threading.Lock()
+_extra_ok = True                       # set to False if the provider rejects LLM_EXTRA_BODY
 USAGE_FILE = Path(__file__).resolve().parent.parent / "out" / "token_usage.json"
 _usage_lock = threading.Lock()
 
@@ -71,7 +72,7 @@ def model_name():
 
 def chat(system, user, temperature=0.0, retries=None):
     retries = retries or int(os.environ.get("LLM_RETRIES", "4"))
-    global _last_call
+    global _last_call, _extra_ok
     if not available():
         return None
     left = _budget_left()
@@ -86,14 +87,18 @@ def chat(system, user, temperature=0.0, retries=None):
         "temperature": temperature,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
     }
+    extra = {}
     try:                                    # optional provider specific fields, e.g. {"thinking": {"type": "disabled"}}
-        payload.update(json.loads(os.environ.get("LLM_EXTRA_BODY", "") or "{}"))
+        extra = json.loads(os.environ.get("LLM_EXTRA_BODY", "") or "{}")
     except ValueError:
         print("LLM_EXTRA_BODY is not valid JSON; ignoring it", file=sys.stderr, flush=True)
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(base + "/chat/completions", data=body, headers={
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + os.environ["LLM_API_KEY"]})
+
+    def request():
+        body = dict(payload, **(extra if _extra_ok else {}))
+        return urllib.request.Request(base + "/chat/completions", data=json.dumps(body).encode(), headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + os.environ["LLM_API_KEY"]})
+
     for attempt in range(retries):
         with _pace:                                    # space out call starts, even across threads
             wait = gap - (time.time() - _last_call)
@@ -101,11 +106,16 @@ def chat(system, user, temperature=0.0, retries=None):
                 time.sleep(wait)
             _last_call = time.time()
         try:
-            with urllib.request.urlopen(req, timeout=180) as r:
+            with urllib.request.urlopen(request(), timeout=180) as r:
                 data = json.loads(r.read())
             _record(data.get("usage"))
             return data["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as e:
+            if e.code in (400, 422) and extra and _extra_ok:
+                _extra_ok = False                  # another provider: drop LLM_EXTRA_BODY once and retry plainly
+                print(f"LLM {e.code} with LLM_EXTRA_BODY; retrying without it for the rest of the run",
+                      file=sys.stderr, flush=True)
+                continue
             if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
                 pause = min(4 * 2 ** attempt, 40)          # back off harder on rate limits
                 print(f"LLM {e.code}, retry {attempt + 1}/{retries - 1} in {pause}s", file=sys.stderr, flush=True)

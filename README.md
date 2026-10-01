@@ -53,7 +53,7 @@ Any OpenAI-compatible chat API works. `.env` settings:
 | Setting | Meaning |
 |---|---|
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | the provider (BytePlus, DeepSeek, OpenAI, Gemini's OpenAI endpoint, ...) |
-| `LLM_EXTRA_BODY` | optional JSON merged into each request; I use `{"thinking":{"type":"disabled"}}` |
+| `LLM_EXTRA_BODY` | optional JSON merged into each request; I use `{"thinking":{"type":"disabled"}}` on BytePlus. If a provider rejects it, the client drops it automatically and retries. |
 | `LLM_TOKEN_BUDGET` | hard cap on tokens per model across runs; past it the system falls back instead of spending |
 | `LLM_WORKERS`, `LLM_MIN_INTERVAL` | parallel questions (default 6) and spacing between calls, for rate limits |
 
